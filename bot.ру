@@ -1,0 +1,82 @@
+import asyncio
+from aiogram import Bot, Dispatcher, F
+from aiogram.types import Message
+from aiogram.enums import ParseMode
+
+# --- НАСТРОЙКИ ---
+BOT_TOKEN = 8073706657:AAHZGGH4agNK_IDpUtX6QoNgFM4Wk_6yrH4      # Вставь токен от BotFather
+TARGET_CHAT_ID = -1001234567890     # ID вашей группы
+TARGET_THREAD_ID = 12345            # ID темы для ДЗ (message_thread_id)
+YOUR_TELEGRAM_ID = 123456789        # Твой личный ID в Telegram
+
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
+
+@dp.message(F.chat.type == "private")
+async def process_homework(message: Message):
+    if message.from_user.id != YOUR_TELEGRAM_ID:
+        await message.answer("Извините, доступ ограничен.")
+        return
+
+    raw_text = message.text or message.caption
+
+    if not raw_text or "|" not in raw_text:
+        await message.answer(
+            "Отправляй задание через разделитель `|`:\n\n"
+            "`Предмет | Текст задания | Дата`\n\n"
+            "*Пример:*\n"
+            "`Теоретическая механика | На лекцию принести тетрадь... | (13.05.2026)`",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+
+    parts = [p.strip() for p in raw_text.split("|", 2)]
+    
+    if len(parts) == 3:
+        subject, task, deadline = parts
+        
+        formatted_post = (
+            f"<b>{subject}</b>\n\n"
+            f"{task}\n\n"
+            f"<u>{deadline}</u>"
+        )
+
+        try:
+            if message.photo:
+                photo_id = message.photo[-1].file_id
+                await bot.send_photo(
+                    chat_id=TARGET_CHAT_ID,
+                    message_thread_id=TARGET_THREAD_ID,
+                    photo=photo_id,
+                    caption=formatted_post,
+                    parse_mode=ParseMode.HTML
+                )
+            elif message.document:
+                doc_id = message.document.file_id
+                await bot.send_document(
+                    chat_id=TARGET_CHAT_ID,
+                    message_thread_id=TARGET_THREAD_ID,
+                    document=doc_id,
+                    caption=formatted_post,
+                    parse_mode=ParseMode.HTML
+                )
+            else:
+                await bot.send_message(
+                    chat_id=TARGET_CHAT_ID,
+                    message_thread_id=TARGET_THREAD_ID,
+                    text=formatted_post,
+                    parse_mode=ParseMode.HTML
+                )
+
+            await message.answer("✅ Домашнее задание опубликовано!")
+        except Exception as e:
+            await message.answer(f"❌ Ошибка отправки: {e}")
+    else:
+        await message.answer("Укажи через `|`: `Предмет | Текст | Дата`", parse_mode=ParseMode.MARKDOWN)
+
+async def main():
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
