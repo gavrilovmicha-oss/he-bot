@@ -62,7 +62,6 @@ def format_homework_text(raw_text: str) -> str:
         task = parts[1].strip()
         deadline = parts[2].strip()
         return (
-            f"<b>Домашнее задание</b>\n"
             f"<b>Предмет:</b> {subject}\n\n"
             f"{task}\n\n"
             f"<b>Срок сдачи:</b> <u>{deadline}</u>"
