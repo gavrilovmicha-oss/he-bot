@@ -56,7 +56,7 @@ def parse_deadline_date(deadline_str: str):
         return None
 
 def format_homework_text(raw_text: str) -> str:
-    parts = raw_text.split('|')
+    parts = raw_text.split('|', 2)
     if len(parts) == 3:
         subject = parts[0].strip()
         task = parts[1].strip()
@@ -72,7 +72,7 @@ def format_homework_text(raw_text: str) -> str:
 def register_task_reminder(raw_text: str):
     if '|' not in raw_text:
         return
-    parts = raw_text.split('|')
+    parts = raw_text.split('|', 2)
     if len(parts) == 3:
         subject = parts[0].strip()
         task = parts[1].strip()
