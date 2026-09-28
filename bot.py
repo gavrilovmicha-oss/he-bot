@@ -23,8 +23,8 @@ threading.Thread(target=run_flask, daemon=True).start()
 
 # --- Настройки бота ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-TARGET_CHAT_ID = -1001234567890  # Укажи ID своей группы
-TARGET_THREAD_ID = 123           # Укажи ID темы (topic)
+TARGET_CHAT_ID = -1002211821382  # ID группы
+TARGET_THREAD_ID = 6488          # ID темы (topic)
 
 # Часовой пояс Москва (UTC+3)
 MSK_TZ = timezone(timedelta(hours=3))
