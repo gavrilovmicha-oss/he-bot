@@ -3,6 +3,7 @@ import threading
 import asyncio
 import re
 import logging
+import html
 from datetime import datetime, timedelta, timezone
 from flask import Flask
 from aiogram import Bot, Dispatcher, F
@@ -61,15 +62,16 @@ def parse_deadline_date(deadline_str: str):
 def format_homework_text(raw_text: str) -> str:
     parts = raw_text.split('|', 2)
     if len(parts) == 3:
-        subject = parts[0].strip()
-        task = parts[1].strip()
-        deadline = parts[2].strip()
+        # Экранируем символы, которые могут сломать HTML
+        subject = html.escape(parts[0].strip())
+        task = html.escape(parts[1].strip())
+        deadline = html.escape(parts[2].strip())
         return (
             f"<b>Предмет:</b> {subject}\n\n"
             f"{task}\n\n"
             f"<b>Срок сдачи:</b> <u>{deadline}</u>"
         )
-    return raw_text
+    return html.escape(raw_text)
 
 def register_task_reminder(raw_text: str):
     if '|' not in raw_text:
@@ -114,7 +116,6 @@ async def process_media_group(media_group_id: str):
 
     try:
         if len(media) == 1:
-            # Если в медиагруппе оказалось всего одно фото/документ
             msg = messages[0]
             if msg.photo:
                 await bot.send_photo(
@@ -201,11 +202,15 @@ async def reminder_checker():
         now_msk = datetime.now(MSK_TZ)
         for task in tasks_db:
             if not task["reminded"] and now_msk >= task["reminder_dt"]:
+                subject_esc = html.escape(task['subject'])
+                task_esc = html.escape(task['task'])
+                deadline_esc = html.escape(task['deadline_str'])
+                
                 text = (
                     f"⏰ <b>НАПОМИНАНИЕ О ДЕДЛАЙНЕ</b>\n\n"
-                    f"<b>Предмет:</b> {task['subject']}\n"
-                    f"<b>Задание:</b> {task['task']}\n"
-                    f"<b>Срок сдачи:</b> <u>{task['deadline_str']}</u>"
+                    f"<b>Предмет:</b> {subject_esc}\n"
+                    f"<b>Задание:</b> {task_esc}\n"
+                    f"<b>Срок сдачи:</b> <u>{deadline_esc}</u>"
                 )
                 try:
                     await bot.send_message(
