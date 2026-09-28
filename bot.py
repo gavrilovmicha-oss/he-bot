@@ -79,8 +79,8 @@ def register_task_reminder(raw_text: str):
         
         deadline_dt = parse_deadline_date(deadline_str)
         if deadline_dt:
-            # Напоминание за 12 часов до 00:00 дня сдачи (в 12:00 накануне)
-            reminder_dt = deadline_dt - timedelta(hours=12)
+            # Ровно за 31 час
+            reminder_dt = deadline_dt - timedelta(hours=31)
             tasks_db.append({
                 "subject": subject,
                 "task": task,
@@ -173,11 +173,10 @@ async def reminder_checker():
         for task in tasks_db:
             if not task["reminded"] and now_msk >= task["reminder_dt"]:
                 text = (
-                    f"<b>НАПОМИНАНИЕ О ДЕДЛАЙНЕ</b>\n"
-                    f"Срок сдачи завтра.\n\n"
+                    f"⏰ <b>НАПОМИНАНИЕ О ДЕДЛАЙНЕ</b>\n\n"
                     f"<b>Предмет:</b> {task['subject']}\n"
                     f"<b>Задание:</b> {task['task']}\n"
-                    f"<b>Срок:</b> <u>{task['deadline_str']}</u>"
+                    f"<b>Срок сдачи:</b> <u>{task['deadline_str']}</u>"
                 )
                 try:
                     await bot.send_message(
