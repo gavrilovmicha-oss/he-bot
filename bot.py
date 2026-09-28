@@ -2,11 +2,14 @@ import os
 import threading
 import asyncio
 import re
+import logging
 from datetime import datetime, timedelta, timezone
 from flask import Flask
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, InputMediaPhoto, InputMediaDocument
 from aiogram.enums import ParseMode
+
+logging.basicConfig(level=logging.INFO)
 
 # --- Flask-заглушка для Render ---
 app = Flask(__name__)
@@ -79,7 +82,7 @@ def register_task_reminder(raw_text: str):
         
         deadline_dt = parse_deadline_date(deadline_str)
         if deadline_dt:
-            # Ровно за 31 час
+            # Напоминание за 31 час
             reminder_dt = deadline_dt - timedelta(hours=31)
             tasks_db.append({
                 "subject": subject,
@@ -109,16 +112,39 @@ async def process_media_group(media_group_id: str):
         elif msg.document:
             media.append(InputMediaDocument(media=msg.document.file_id, caption=cap, parse_mode=ParseMode.HTML))
 
-    if media:
-        await bot.send_media_group(
-            chat_id=TARGET_CHAT_ID,
-            message_thread_id=TARGET_THREAD_ID,
-            media=media
-        )
+    try:
+        if len(media) == 1:
+            # Если в медиагруппе оказалось всего одно фото/документ
+            msg = messages[0]
+            if msg.photo:
+                await bot.send_photo(
+                    chat_id=TARGET_CHAT_ID,
+                    message_thread_id=TARGET_THREAD_ID,
+                    photo=msg.photo[-1].file_id,
+                    caption=formatted_text,
+                    parse_mode=ParseMode.HTML
+                )
+            elif msg.document:
+                await bot.send_document(
+                    chat_id=TARGET_CHAT_ID,
+                    message_thread_id=TARGET_THREAD_ID,
+                    document=msg.document.file_id,
+                    caption=formatted_text,
+                    parse_mode=ParseMode.HTML
+                )
+        elif len(media) > 1:
+            await bot.send_media_group(
+                chat_id=TARGET_CHAT_ID,
+                message_thread_id=TARGET_THREAD_ID,
+                media=media
+            )
+
         await first_msg.answer("Сообщение опубликовано.")
 
         if caption_raw:
             register_task_reminder(caption_raw)
+    except Exception as e:
+        await first_msg.answer(f"Ошибка при публикации: {e}")
 
 @dp.message(F.chat.type == "private")
 async def handle_private_message(message: Message):
@@ -140,32 +166,35 @@ async def handle_private_message(message: Message):
 
     formatted_text = format_homework_text(caption_or_text)
 
-    if message.photo:
-        await bot.send_photo(
-            chat_id=TARGET_CHAT_ID,
-            message_thread_id=TARGET_THREAD_ID,
-            photo=message.photo[-1].file_id,
-            caption=formatted_text,
-            parse_mode=ParseMode.HTML
-        )
-    elif message.document:
-        await bot.send_document(
-            chat_id=TARGET_CHAT_ID,
-            message_thread_id=TARGET_THREAD_ID,
-            document=message.document.file_id,
-            caption=formatted_text,
-            parse_mode=ParseMode.HTML
-        )
-    else:
-        await bot.send_message(
-            chat_id=TARGET_CHAT_ID,
-            message_thread_id=TARGET_THREAD_ID,
-            text=formatted_text,
-            parse_mode=ParseMode.HTML
-        )
+    try:
+        if message.photo:
+            await bot.send_photo(
+                chat_id=TARGET_CHAT_ID,
+                message_thread_id=TARGET_THREAD_ID,
+                photo=message.photo[-1].file_id,
+                caption=formatted_text,
+                parse_mode=ParseMode.HTML
+            )
+        elif message.document:
+            await bot.send_document(
+                chat_id=TARGET_CHAT_ID,
+                message_thread_id=TARGET_THREAD_ID,
+                document=message.document.file_id,
+                caption=formatted_text,
+                parse_mode=ParseMode.HTML
+            )
+        else:
+            await bot.send_message(
+                chat_id=TARGET_CHAT_ID,
+                message_thread_id=TARGET_THREAD_ID,
+                text=formatted_text,
+                parse_mode=ParseMode.HTML
+            )
 
-    register_task_reminder(caption_or_text)
-    await message.answer("Сообщение опубликовано.")
+        register_task_reminder(caption_or_text)
+        await message.answer("Сообщение опубликовано.")
+    except Exception as e:
+        await message.answer(f"Ошибка при публикации: {e}")
 
 async def reminder_checker():
     while True:
