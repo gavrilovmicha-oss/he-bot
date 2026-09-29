@@ -54,10 +54,12 @@ def load_tasks():
         try:
             with open(TASKS_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
+                loaded = []
                 for item in data:
                     item["deadline_dt"] = datetime.fromisoformat(item["deadline_dt"])
                     item["reminder_dt"] = datetime.fromisoformat(item["reminder_dt"])
-                tasks_db = data
+                    loaded.append(item)
+                tasks_db = loaded
         except Exception as e:
             logging.error(f"Ошибка при загрузке задач из файла: {e}")
             tasks_db = []
@@ -69,8 +71,10 @@ def save_tasks():
         serializable_data = []
         for task in tasks_db:
             item = task.copy()
-            item["deadline_dt"] = item["deadline_dt"].isoformat()
-            item["reminder_dt"] = item["reminder_dt"].isoformat()
+            if isinstance(item["deadline_dt"], datetime):
+                item["deadline_dt"] = item["deadline_dt"].isoformat()
+            if isinstance(item["reminder_dt"], datetime):
+                item["reminder_dt"] = item["reminder_dt"].isoformat()
             serializable_data.append(item)
         with open(TASKS_FILE, "w", encoding="utf-8") as f:
             json.dump(serializable_data, f, ensure_ascii=False, indent=2)
@@ -132,7 +136,6 @@ def register_or_update_task(raw_text: str, user_msg_id: int, sent_msg_id: int):
 
             reminder_dt = deadline_dt - timedelta(hours=offset_hours)
 
-            # Проверяем, существует ли уже такая задача по user_msg_id
             existing = next((t for t in tasks_db if t.get("user_msg_id") == user_msg_id), None)
             if existing:
                 existing["subject"] = subject
@@ -158,65 +161,85 @@ def register_or_update_task(raw_text: str, user_msg_id: int, sent_msg_id: int):
 
 @dp.message(Command("tasks", "hw"))
 async def show_tasks_list(message: Message):
-    now_msk = datetime.now(MSK_TZ)
-    active_tasks = [t for t in tasks_db if t["deadline_dt"] >= now_msk]
+    try:
+        now_msk = datetime.now(MSK_TZ)
+        active_tasks = []
+        for t in tasks_db:
+            dt = t["deadline_dt"]
+            if isinstance(dt, str):
+                dt = datetime.fromisoformat(dt)
+            if dt >= now_msk:
+                active_tasks.append(t)
 
-    if not active_tasks:
-        await message.answer("Список задач пуст.", parse_mode=ParseMode.HTML)
-        return
+        if not active_tasks:
+            await message.answer("Список задач пуст.", parse_mode=ParseMode.HTML)
+            return
 
-    active_tasks.sort(key=lambda x: x["deadline_dt"])
+        active_tasks.sort(key=lambda x: x["deadline_dt"] if isinstance(x["deadline_dt"], datetime) else datetime.fromisoformat(x["deadline_dt"]))
 
-    text_lines = ["<b>Список предстоящих дедлайнов:</b>\n"]
-    for idx, t in enumerate(active_tasks, 1):
-        subj = html.escape(t["subject"])
-        tsk = html.escape(t["task"])
-        dl = html.escape(t["deadline_str"])
-        text_lines.append(f"{idx}. <b>{subj}</b> — {tsk}\n   Срок сдачи: <u>{dl}</u>\n")
+        text_lines = ["<b>Список предстоящих дедлайнов:</b>\n"]
+        for idx, t in enumerate(active_tasks, 1):
+            subj = html.escape(t["subject"])
+            tsk = html.escape(t["task"])
+            dl = html.escape(t["deadline_str"])
+            text_lines.append(f"{idx}. <b>{subj}</b> — {tsk}\n   Срок сдачи: <u>{dl}</u>\n")
 
-    await message.answer("\n".join(text_lines), parse_mode=ParseMode.HTML)
+        await message.answer("\n".join(text_lines), parse_mode=ParseMode.HTML)
+    except Exception as e:
+        logging.error(f"Ошибка в /tasks: {e}")
+        await message.answer(f"Произошла ошибка при получении списка задач: {e}")
 
 @dp.message(Command("subject", "predmet"))
 async def show_subject_tasks(message: Message, command: CommandObject):
-    now_msk = datetime.now(MSK_TZ)
-    active_tasks = [t for t in tasks_db if t["deadline_dt"] >= now_msk]
+    try:
+        now_msk = datetime.now(MSK_TZ)
+        active_tasks = []
+        for t in tasks_db:
+            dt = t["deadline_dt"]
+            if isinstance(dt, str):
+                dt = datetime.fromisoformat(dt)
+            if dt >= now_msk:
+                active_tasks.append(t)
 
-    if not active_tasks:
-        await message.answer("Список задач пуст.", parse_mode=ParseMode.HTML)
-        return
+        if not active_tasks:
+            await message.answer("Список задач пуст.", parse_mode=ParseMode.HTML)
+            return
 
-    if not command.args or not command.args.strip():
-        subjects = sorted(list({t["subject"] for t in active_tasks}))
-        subj_list = "\n".join([f"• {html.escape(s)}" for s in subjects])
-        await message.answer(
-            f"<b>Предметы с активными заданиями:</b>\n\n{subj_list}\n\n"
-            f"<i>Для поиска введите: /subject [название предмета]</i>",
-            parse_mode=ParseMode.HTML
-        )
-        return
+        if not command.args or not command.args.strip():
+            subjects = sorted(list({t["subject"] for t in active_tasks}))
+            subj_list = "\n".join([f"• {html.escape(s)}" for s in subjects])
+            await message.answer(
+                f"<b>Предметы с активными заданиями:</b>\n\n{subj_list}\n\n"
+                f"<i>Для поиска введите: /subject [название предмета]</i>",
+                parse_mode=ParseMode.HTML
+            )
+            return
 
-    query = command.args.strip().lower()
-    matched_tasks = [
-        t for t in active_tasks 
-        if query in t["subject"].lower()
-    ]
+        query = command.args.strip().lower()
+        matched_tasks = [
+            t for t in active_tasks 
+            if query in t["subject"].lower()
+        ]
 
-    if not matched_tasks:
-        await message.answer(
-            f"Заданий по запросу «<b>{html.escape(command.args.strip())}</b>» не найдено.",
-            parse_mode=ParseMode.HTML
-        )
-        return
+        if not matched_tasks:
+            await message.answer(
+                f"Заданий по запросу «<b>{html.escape(command.args.strip())}</b>» не найдено.",
+                parse_mode=ParseMode.HTML
+            )
+            return
 
-    matched_tasks.sort(key=lambda x: x["deadline_dt"])
+        matched_tasks.sort(key=lambda x: x["deadline_dt"] if isinstance(x["deadline_dt"], datetime) else datetime.fromisoformat(x["deadline_dt"]))
 
-    text_lines = [f"<b>Задания по предмету «{html.escape(matched_tasks[0]['subject'])}»:</b>\n"]
-    for idx, t in enumerate(matched_tasks, 1):
-        tsk = html.escape(t["task"])
-        dl = html.escape(t["deadline_str"])
-        text_lines.append(f"{idx}. {tsk}\n   Срок сдачи: <u>{dl}</u>\n")
+        text_lines = [f"<b>Задания по предмету «{html.escape(matched_tasks[0]['subject'])}»:</b>\n"]
+        for idx, t in enumerate(matched_tasks, 1):
+            tsk = html.escape(t["task"])
+            dl = html.escape(t["deadline_str"])
+            text_lines.append(f"{idx}. {tsk}\n   Срок сдачи: <u>{dl}</u>\n")
 
-    await message.answer("\n".join(text_lines), parse_mode=ParseMode.HTML)
+        await message.answer("\n".join(text_lines), parse_mode=ParseMode.HTML)
+    except Exception as e:
+        logging.error(f"Ошибка в /subject: {e}")
+        await message.answer(f"Произошла ошибка: {e}")
 
 # --- Обработка медиагрупп ---
 media_groups = {}
@@ -344,7 +367,6 @@ async def handle_edited_private_message(message: Message):
     if not caption_or_text:
         return
 
-    # Находим задачу по user_msg_id
     task_entry = next((t for t in tasks_db if t.get("user_msg_id") == message.message_id), None)
     if not task_entry:
         await message.answer("Не удалось найти ранее отправленное сообщение для исправления.")
@@ -380,9 +402,12 @@ async def reminder_checker():
     while True:
         now_msk = datetime.now(MSK_TZ)
 
-        # 1. Отправка напоминаний
         for task in tasks_db:
-            if not task["reminded"] and now_msk >= task["reminder_dt"]:
+            rem_dt = task["reminder_dt"]
+            if isinstance(rem_dt, str):
+                rem_dt = datetime.fromisoformat(rem_dt)
+
+            if not task["reminded"] and now_msk >= rem_dt:
                 subject_esc = html.escape(task['subject'])
                 task_esc = html.escape(task['task'])
                 deadline_esc = html.escape(task['deadline_str'])
@@ -406,12 +431,16 @@ async def reminder_checker():
                 except Exception as e:
                     logging.error(f"Ошибка при отправке напоминания: {e}")
 
-        # 2. Очистка прошедших задач
         initial_count = len(tasks_db)
-        tasks_db = [
-            t for t in tasks_db 
-            if now_msk <= (t["deadline_dt"] + timedelta(days=1))
-        ]
+        cleaned_db = []
+        for t in tasks_db:
+            dl_dt = t["deadline_dt"]
+            if isinstance(dl_dt, str):
+                dl_dt = datetime.fromisoformat(dl_dt)
+            if now_msk <= (dl_dt + timedelta(days=1)):
+                cleaned_db.append(t)
+
+        tasks_db = cleaned_db
         if len(tasks_db) < initial_count:
             save_tasks()
 
