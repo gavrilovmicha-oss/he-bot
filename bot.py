@@ -5,6 +5,8 @@ import re
 import logging
 import html
 import json
+import time
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from flask import Flask
 from aiogram import Bot, Dispatcher, F
@@ -26,6 +28,21 @@ def run_flask():
     app.run(host="0.0.0.0", port=port)
 
 threading.Thread(target=run_flask, daemon=True).start()
+
+# --- Фоновый самопингер для предотвращения сна Render ---
+RENDER_URL = "https://he-bot.onrender.com"
+
+def self_ping():
+    while True:
+        time.sleep(600) # пинг каждые 10 минут
+        try:
+            req = urllib.request.Request(RENDER_URL, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req) as response:
+                logging.info("Self-ping status: OK")
+        except Exception as e:
+            logging.warning(f"Self-ping error: {e}")
+
+threading.Thread(target=self_ping, daemon=True).start()
 
 # --- Настройки бота ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
