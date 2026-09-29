@@ -47,11 +47,15 @@ tasks_db = []
 # --- Синхронизация и восстановление через Telegram ---
 
 def parse_tasks_json(data):
+    """Преобразует строковые ISO-даты из JSON обратно в объекты datetime"""
     loaded = []
     for item in data:
-        item["deadline_dt"] = datetime.fromisoformat(item["deadline_dt"])
-        item["reminder_dt"] = datetime.fromisoformat(item["reminder_dt"])
-        loaded.append(item)
+        task = item.copy()
+        if isinstance(task.get("deadline_dt"), str):
+            task["deadline_dt"] = datetime.fromisoformat(task["deadline_dt"])
+        if isinstance(task.get("reminder_dt"), str):
+            task["reminder_dt"] = datetime.fromisoformat(task["reminder_dt"])
+        loaded.append(task)
     return loaded
 
 async def save_tasks():
@@ -83,7 +87,7 @@ async def save_tasks():
         logging.error(f"Ошибка при сохранении задач: {e}")
 
 async def restore_tasks_from_telegram():
-    """Скачивает последний бэкап из Telegram при старте сервера"""
+    """Читает локальный бэкап при старте сервера"""
     global tasks_db
     try:
         if os.path.exists(TASKS_FILE):
@@ -95,7 +99,6 @@ async def restore_tasks_from_telegram():
     except Exception as e:
         logging.warning(f"Ошибка чтения локального файла: {e}")
 
-    # Если локального файла нет, пытаемся получить последний файл из истории чата
     logging.info("Локальный файл не найден. Ожидание первого сохранения/бэкапа...")
     tasks_db = []
 
@@ -211,7 +214,13 @@ async def show_tasks_list(message: Message):
 async def show_subject_tasks(message: Message, command: CommandObject):
     try:
         now_msk = datetime.now(MSK_TZ)
-        active_tasks = [t for t in tasks_db if (t["deadline_dt"] if isinstance(t["deadline_dt"], datetime) else datetime.fromisoformat(t["deadline_dt"])) >= now_msk]
+        active_tasks = []
+        for t in tasks_db:
+            dt = t["deadline_dt"]
+            if isinstance(dt, str):
+                dt = datetime.fromisoformat(dt)
+            if dt >= now_msk:
+                active_tasks.append(t)
 
         if not active_tasks:
             await message.answer("Список задач пуст.", parse_mode=ParseMode.HTML)
@@ -296,7 +305,7 @@ async def handle_private_message(message: Message):
         await message.answer("Отказано в доступе.")
         return
 
-    # Ручное восстановление базы из файлика tasks.json, если скинете его боту вручную
+    # Ручное восстановление базы из JSON-файла
     if message.document and message.document.file_name == "tasks.json":
         try:
             file = await bot.get_file(message.document.file_id)
@@ -400,9 +409,15 @@ async def reminder_checker():
                 except Exception as e:
                     logging.error(f"Ошибка при отправке напоминания: {e}")
 
-        # Автоматическая очистка задач старше 1 дня после дедлайна
+        # Очистка задач старше 1 дня после дедлайна
         initial_count = len(tasks_db)
-        cleaned_db = [t for t in tasks_db if now_msk <= ((t["deadline_dt"] if isinstance(t["deadline_dt"], datetime) else datetime.fromisoformat(t["deadline_dt"])) + timedelta(days=1))]
+        cleaned_db = []
+        for t in tasks_db:
+            dl = t["deadline_dt"]
+            if isinstance(dl, str):
+                dl = datetime.fromisoformat(dl)
+            if now_msk <= (dl + timedelta(days=1)):
+                cleaned_db.append(t)
 
         tasks_db = cleaned_db
         if len(tasks_db) < initial_count:
