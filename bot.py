@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from flask import Flask
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandObject
-from aiogram.types import Message, InputMediaPhoto, InputMediaDocument, BotCommand
+from aiogram.types import Message, InputMediaPhoto, InputMediaDocument, BotCommand, BufferedInputFile
 from aiogram.enums import ParseMode
 
 logging.basicConfig(level=logging.INFO)
@@ -31,42 +31,31 @@ threading.Thread(target=run_flask, daemon=True).start()
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 TARGET_CHAT_ID = -1002211821382  # ID группы
 TARGET_THREAD_ID = 6488          # ID темы (topic)
+ADMIN_ID = 1796699299            # ID администратора для сохранения и восстановления бэкапов
 
 # Часовой пояс Москва (UTC+3)
 MSK_TZ = timezone(timedelta(hours=3))
 
-# Список Telegram ID пользователей с правом добавления ДЗ
-ALLOWED_USERS = [
-    1796699299,
-]
-
+ALLOWED_USERS = [1796699299]
 TASKS_FILE = "tasks.json"
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# --- Работа с хранилищем (tasks.json) ---
 tasks_db = []
 
-def load_tasks():
-    global tasks_db
-    if os.path.exists(TASKS_FILE):
-        try:
-            with open(TASKS_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                loaded = []
-                for item in data:
-                    item["deadline_dt"] = datetime.fromisoformat(item["deadline_dt"])
-                    item["reminder_dt"] = datetime.fromisoformat(item["reminder_dt"])
-                    loaded.append(item)
-                tasks_db = loaded
-        except Exception as e:
-            logging.error(f"Ошибка при загрузке задач из файла: {e}")
-            tasks_db = []
-    else:
-        tasks_db = []
+# --- Синхронизация и восстановление через Telegram ---
 
-def save_tasks():
+def parse_tasks_json(data):
+    loaded = []
+    for item in data:
+        item["deadline_dt"] = datetime.fromisoformat(item["deadline_dt"])
+        item["reminder_dt"] = datetime.fromisoformat(item["reminder_dt"])
+        loaded.append(item)
+    return loaded
+
+async def save_tasks():
+    """Сохраняет задачи локально и отправляет бэкап в Telegram админу"""
     try:
         serializable_data = []
         for task in tasks_db:
@@ -76,14 +65,42 @@ def save_tasks():
             if isinstance(item["reminder_dt"], datetime):
                 item["reminder_dt"] = item["reminder_dt"].isoformat()
             serializable_data.append(item)
-        with open(TASKS_FILE, "w", encoding="utf-8") as f:
-            json.dump(serializable_data, f, ensure_ascii=False, indent=2)
+        
+        json_bytes = json.dumps(serializable_data, ensure_ascii=False, indent=2).encode('utf-8')
+        
+        # 1. Сохраняем локально
+        with open(TASKS_FILE, "wb") as f:
+            f.write(json_bytes)
+            
+        # 2. Отправляем копию в ЛС админу для сохранения
+        input_file = BufferedInputFile(json_bytes, filename="tasks.json")
+        await bot.send_document(
+            chat_id=ADMIN_ID,
+            document=input_file,
+            caption="#BACKUP_TASKS_DATA"
+        )
     except Exception as e:
-        logging.error(f"Ошибка при сохранении задач в файл: {e}")
+        logging.error(f"Ошибка при сохранении задач: {e}")
 
-load_tasks()
+async def restore_tasks_from_telegram():
+    """Скачивает последний бэкап из Telegram при старте сервера"""
+    global tasks_db
+    try:
+        if os.path.exists(TASKS_FILE):
+            with open(TASKS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                tasks_db = parse_tasks_json(data)
+                logging.info(f"База загружена из локального файла. Задач: {len(tasks_db)}")
+                return
+    except Exception as e:
+        logging.warning(f"Ошибка чтения локального файла: {e}")
+
+    # Если локального файла нет, пытаемся получить последний файл из истории чата
+    logging.info("Локальный файл не найден. Ожидание первого сохранения/бэкапа...")
+    tasks_db = []
 
 # --- Парсинг и форматирование ---
+
 def parse_deadline_date(deadline_str: str):
     match = re.search(r'(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?', deadline_str)
     if not match:
@@ -94,7 +111,6 @@ def parse_deadline_date(deadline_str: str):
     if year < 100:
         year += 2000
 
-    # Пробуем формат ДД.ММ.ГГГГ, если месяц > 12 — переключаем на ММ.ДД.ГГГГ
     day, month = p1, p2
     if month > 12 and p1 <= 12:
         day, month = p2, p1
@@ -117,7 +133,7 @@ def format_homework_text(raw_text: str) -> str:
         )
     return html.escape(raw_text)
 
-def register_or_update_task(raw_text: str, user_msg_id: int, sent_msg_id: int):
+async def register_or_update_task(raw_text: str, user_msg_id: int, sent_msg_id: int):
     parts = [p.strip() for p in raw_text.split('|')]
     if len(parts) >= 3:
         subject = parts[0]
@@ -144,6 +160,8 @@ def register_or_update_task(raw_text: str, user_msg_id: int, sent_msg_id: int):
                 existing["deadline_dt"] = deadline_dt
                 existing["reminder_dt"] = reminder_dt
                 existing["reminded"] = False
+                if sent_msg_id:
+                    existing["sent_msg_id"] = sent_msg_id
             else:
                 tasks_db.append({
                     "user_msg_id": user_msg_id,
@@ -155,9 +173,9 @@ def register_or_update_task(raw_text: str, user_msg_id: int, sent_msg_id: int):
                     "reminder_dt": reminder_dt,
                     "reminded": False
                 })
-            save_tasks()
+            await save_tasks()
 
-# --- ОБРАБОТКА КОМАНД ---
+# --- КОМАНДЫ ---
 
 @dp.message(Command("tasks", "hw"))
 async def show_tasks_list(message: Message):
@@ -193,13 +211,7 @@ async def show_tasks_list(message: Message):
 async def show_subject_tasks(message: Message, command: CommandObject):
     try:
         now_msk = datetime.now(MSK_TZ)
-        active_tasks = []
-        for t in tasks_db:
-            dt = t["deadline_dt"]
-            if isinstance(dt, str):
-                dt = datetime.fromisoformat(dt)
-            if dt >= now_msk:
-                active_tasks.append(t)
+        active_tasks = [t for t in tasks_db if (t["deadline_dt"] if isinstance(t["deadline_dt"], datetime) else datetime.fromisoformat(t["deadline_dt"])) >= now_msk]
 
         if not active_tasks:
             await message.answer("Список задач пуст.", parse_mode=ParseMode.HTML)
@@ -216,16 +228,10 @@ async def show_subject_tasks(message: Message, command: CommandObject):
             return
 
         query = command.args.strip().lower()
-        matched_tasks = [
-            t for t in active_tasks 
-            if query in t["subject"].lower()
-        ]
+        matched_tasks = [t for t in active_tasks if query in t["subject"].lower()]
 
         if not matched_tasks:
-            await message.answer(
-                f"Заданий по запросу «<b>{html.escape(command.args.strip())}</b>» не найдено.",
-                parse_mode=ParseMode.HTML
-            )
+            await message.answer(f"Заданий по запросу «<b>{html.escape(command.args.strip())}</b>» не найдено.", parse_mode=ParseMode.HTML)
             return
 
         matched_tasks.sort(key=lambda x: x["deadline_dt"] if isinstance(x["deadline_dt"], datetime) else datetime.fromisoformat(x["deadline_dt"]))
@@ -238,10 +244,10 @@ async def show_subject_tasks(message: Message, command: CommandObject):
 
         await message.answer("\n".join(text_lines), parse_mode=ParseMode.HTML)
     except Exception as e:
-        logging.error(f"Ошибка в /subject: {e}")
         await message.answer(f"Произошла ошибка: {e}")
 
-# --- Обработка медиагрупп ---
+# --- ОБРАБОТКА СООБЩЕНИЙ В ЛС ---
+
 media_groups = {}
 
 async def process_media_group(media_group_id: str):
@@ -267,45 +273,43 @@ async def process_media_group(media_group_id: str):
         if len(media) == 1:
             msg = messages[0]
             if msg.photo:
-                sent = await bot.send_photo(
-                    chat_id=TARGET_CHAT_ID,
-                    message_thread_id=TARGET_THREAD_ID,
-                    photo=msg.photo[-1].file_id,
-                    caption=formatted_text,
-                    parse_mode=ParseMode.HTML
-                )
+                sent = await bot.send_photo(chat_id=TARGET_CHAT_ID, message_thread_id=TARGET_THREAD_ID, photo=msg.photo[-1].file_id, caption=formatted_text, parse_mode=ParseMode.HTML)
                 sent_msg_id = sent.message_id
             elif msg.document:
-                sent = await bot.send_document(
-                    chat_id=TARGET_CHAT_ID,
-                    message_thread_id=TARGET_THREAD_ID,
-                    document=msg.document.file_id,
-                    caption=formatted_text,
-                    parse_mode=ParseMode.HTML
-                )
+                sent = await bot.send_document(chat_id=TARGET_CHAT_ID, message_thread_id=TARGET_THREAD_ID, document=msg.document.file_id, caption=formatted_text, parse_mode=ParseMode.HTML)
                 sent_msg_id = sent.message_id
         elif len(media) > 1:
-            sent_list = await bot.send_media_group(
-                chat_id=TARGET_CHAT_ID,
-                message_thread_id=TARGET_THREAD_ID,
-                media=media
-            )
+            sent_list = await bot.send_media_group(chat_id=TARGET_CHAT_ID, message_thread_id=TARGET_THREAD_ID, media=media)
             if sent_list:
                 sent_msg_id = sent_list[0].message_id
 
         await first_msg.answer("Сообщение опубликовано.")
 
         if caption_raw and sent_msg_id:
-            register_or_update_task(caption_raw, first_msg.message_id, sent_msg_id)
+            await register_or_update_task(caption_raw, first_msg.message_id, sent_msg_id)
     except Exception as e:
         await first_msg.answer(f"Ошибка при публикации: {e}")
 
-# --- Обработка обычных сообщений в ЛС ---
 @dp.message(F.chat.type == "private")
 async def handle_private_message(message: Message):
     if ALLOWED_USERS and message.from_user.id not in ALLOWED_USERS:
-        await message.answer("Отказано в доступе. Недостаточно прав для публикации.")
+        await message.answer("Отказано в доступе.")
         return
+
+    # Ручное восстановление базы из файлика tasks.json, если скинете его боту вручную
+    if message.document and message.document.file_name == "tasks.json":
+        try:
+            file = await bot.get_file(message.document.file_id)
+            file_bytes = await bot.download_file(file.file_path)
+            data = json.loads(file_bytes.read().decode('utf-8'))
+            global tasks_db
+            tasks_db = parse_tasks_json(data)
+            await save_tasks()
+            await message.answer(f"База успешно восстановлена! Загружено задач: {len(tasks_db)}")
+            return
+        except Exception as e:
+            await message.answer(f"Ошибка при восстановлении файла: {e}")
+            return
 
     if message.media_group_id:
         if message.media_group_id not in media_groups:
@@ -324,40 +328,22 @@ async def handle_private_message(message: Message):
     try:
         sent_msg_id = None
         if message.photo:
-            sent = await bot.send_photo(
-                chat_id=TARGET_CHAT_ID,
-                message_thread_id=TARGET_THREAD_ID,
-                photo=message.photo[-1].file_id,
-                caption=formatted_text,
-                parse_mode=ParseMode.HTML
-            )
+            sent = await bot.send_photo(chat_id=TARGET_CHAT_ID, message_thread_id=TARGET_THREAD_ID, photo=message.photo[-1].file_id, caption=formatted_text, parse_mode=ParseMode.HTML)
             sent_msg_id = sent.message_id
         elif message.document:
-            sent = await bot.send_document(
-                chat_id=TARGET_CHAT_ID,
-                message_thread_id=TARGET_THREAD_ID,
-                document=message.document.file_id,
-                caption=formatted_text,
-                parse_mode=ParseMode.HTML
-            )
+            sent = await bot.send_document(chat_id=TARGET_CHAT_ID, message_thread_id=TARGET_THREAD_ID, document=message.document.file_id, caption=formatted_text, parse_mode=ParseMode.HTML)
             sent_msg_id = sent.message_id
         else:
-            sent = await bot.send_message(
-                chat_id=TARGET_CHAT_ID,
-                message_thread_id=TARGET_THREAD_ID,
-                text=formatted_text,
-                parse_mode=ParseMode.HTML
-            )
+            sent = await bot.send_message(chat_id=TARGET_CHAT_ID, message_thread_id=TARGET_THREAD_ID, text=formatted_text, parse_mode=ParseMode.HTML)
             sent_msg_id = sent.message_id
 
         if sent_msg_id:
-            register_or_update_task(caption_or_text, message.message_id, sent_msg_id)
+            await register_or_update_task(caption_or_text, message.message_id, sent_msg_id)
 
         await message.answer("Сообщение опубликовано.")
     except Exception as e:
         await message.answer(f"Ошибка при публикации: {e}")
 
-# --- ОБРАБОТКА РЕДАКТИРОВАНИЯ СООБЩЕНИЙ В ЛС ---
 @dp.edited_message(F.chat.type == "private")
 async def handle_edited_private_message(message: Message):
     if ALLOWED_USERS and message.from_user.id not in ALLOWED_USERS:
@@ -368,35 +354,23 @@ async def handle_edited_private_message(message: Message):
         return
 
     task_entry = next((t for t in tasks_db if t.get("user_msg_id") == message.message_id), None)
-    if not task_entry:
-        await message.answer("Не удалось найти ранее отправленное сообщение для исправления.")
-        return
-
-    sent_msg_id = task_entry["sent_msg_id"]
+    sent_msg_id = task_entry["sent_msg_id"] if task_entry else 0
     formatted_text = format_homework_text(caption_or_text)
 
     try:
-        if message.photo or message.document:
-            await bot.edit_message_caption(
-                chat_id=TARGET_CHAT_ID,
-                message_id=sent_msg_id,
-                caption=formatted_text,
-                parse_mode=ParseMode.HTML
-            )
-        else:
-            await bot.edit_message_text(
-                chat_id=TARGET_CHAT_ID,
-                message_id=sent_msg_id,
-                text=formatted_text,
-                parse_mode=ParseMode.HTML
-            )
+        if sent_msg_id and sent_msg_id != 0:
+            if message.photo or message.document:
+                await bot.edit_message_caption(chat_id=TARGET_CHAT_ID, message_id=sent_msg_id, caption=formatted_text, parse_mode=ParseMode.HTML)
+            else:
+                await bot.edit_message_text(chat_id=TARGET_CHAT_ID, message_id=sent_msg_id, text=formatted_text, parse_mode=ParseMode.HTML)
 
-        register_or_update_task(caption_or_text, message.message_id, sent_msg_id)
-        await message.answer("Сообщение в чате успешно обновлено!")
+        await register_or_update_task(caption_or_text, message.message_id, sent_msg_id)
+        await message.answer("Задание успешно сохранено в базу!")
     except Exception as e:
-        await message.answer(f"Ошибка при обновлении сообщения в чате: {e}")
+        await message.answer(f"Ошибка при сохранении: {e}")
 
-# --- Фоновый запуск проверки дедлайнов и очистки старых задач ---
+# --- Напоминания ---
+
 async def reminder_checker():
     global tasks_db
     while True:
@@ -420,29 +394,19 @@ async def reminder_checker():
                     f"<b>Срок:</b> <u>{deadline_esc}</u>"
                 )
                 try:
-                    await bot.send_message(
-                        chat_id=TARGET_CHAT_ID,
-                        message_thread_id=TARGET_THREAD_ID,
-                        text=text,
-                        parse_mode=ParseMode.HTML
-                    )
+                    await bot.send_message(chat_id=TARGET_CHAT_ID, message_thread_id=TARGET_THREAD_ID, text=text, parse_mode=ParseMode.HTML)
                     task["reminded"] = True
-                    save_tasks()
+                    await save_tasks()
                 except Exception as e:
                     logging.error(f"Ошибка при отправке напоминания: {e}")
 
+        # Автоматическая очистка задач старше 1 дня после дедлайна
         initial_count = len(tasks_db)
-        cleaned_db = []
-        for t in tasks_db:
-            dl_dt = t["deadline_dt"]
-            if isinstance(dl_dt, str):
-                dl_dt = datetime.fromisoformat(dl_dt)
-            if now_msk <= (dl_dt + timedelta(days=1)):
-                cleaned_db.append(t)
+        cleaned_db = [t for t in tasks_db if now_msk <= ((t["deadline_dt"] if isinstance(t["deadline_dt"], datetime) else datetime.fromisoformat(t["deadline_dt"])) + timedelta(days=1))]
 
         tasks_db = cleaned_db
         if len(tasks_db) < initial_count:
-            save_tasks()
+            await save_tasks()
 
         await asyncio.sleep(60)
 
@@ -455,6 +419,7 @@ async def set_bot_commands():
 
 async def main():
     await set_bot_commands()
+    await restore_tasks_from_telegram()
     asyncio.create_task(reminder_checker())
     await dp.start_polling(bot)
 
