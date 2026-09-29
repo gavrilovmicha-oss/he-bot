@@ -5,8 +5,8 @@ import re
 import logging
 import html
 import json
-import time
 import urllib.request
+import time
 from datetime import datetime, timedelta, timezone
 from flask import Flask
 from aiogram import Bot, Dispatcher, F
@@ -16,7 +16,7 @@ from aiogram.enums import ParseMode
 
 logging.basicConfig(level=logging.INFO)
 
-# --- Flask-заглушка для Render ---
+# --- Flask-заглушка и самопинг для Render ---
 app = Flask(__name__)
 
 @app.route('/')
@@ -29,12 +29,12 @@ def run_flask():
 
 threading.Thread(target=run_flask, daemon=True).start()
 
-# --- Фоновый самопингер для предотвращения сна Render ---
 RENDER_URL = "https://he-bot.onrender.com"
 
 def self_ping():
+    """Каждые 10 минут стучится на Flask-сервер, предотвращая засыпание контейнера"""
     while True:
-        time.sleep(600) # пинг каждые 10 минут
+        time.sleep(600)
         try:
             req = urllib.request.Request(RENDER_URL, headers={'User-Agent': 'Mozilla/5.0'})
             with urllib.request.urlopen(req) as response:
@@ -48,11 +48,9 @@ threading.Thread(target=self_ping, daemon=True).start()
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 TARGET_CHAT_ID = -1002211821382  # ID группы
 TARGET_THREAD_ID = 6488          # ID темы (topic)
-ADMIN_ID = 1796699299            # ID администратора для сохранения и восстановления бэкапов
+ADMIN_ID = 1796699299            # ID администратора
 
-# Часовой пояс Москва (UTC+3)
 MSK_TZ = timezone(timedelta(hours=3))
-
 ALLOWED_USERS = [1796699299]
 TASKS_FILE = "tasks.json"
 
@@ -64,11 +62,15 @@ tasks_db = []
 # --- Синхронизация и восстановление через Telegram ---
 
 def parse_tasks_json(data):
+    """Преобразует строковые ISO-даты из JSON обратно в объекты datetime"""
     loaded = []
     for item in data:
-        item["deadline_dt"] = datetime.fromisoformat(item["deadline_dt"])
-        item["reminder_dt"] = datetime.fromisoformat(item["reminder_dt"])
-        loaded.append(item)
+        task = item.copy()
+        if isinstance(task.get("deadline_dt"), str):
+            task["deadline_dt"] = datetime.fromisoformat(task["deadline_dt"])
+        if isinstance(task.get("reminder_dt"), str):
+            task["reminder_dt"] = datetime.fromisoformat(task["reminder_dt"])
+        loaded.append(task)
     return loaded
 
 async def save_tasks():
@@ -85,11 +87,9 @@ async def save_tasks():
         
         json_bytes = json.dumps(serializable_data, ensure_ascii=False, indent=2).encode('utf-8')
         
-        # 1. Сохраняем локально
         with open(TASKS_FILE, "wb") as f:
             f.write(json_bytes)
             
-        # 2. Отправляем копию в ЛС админу для сохранения
         input_file = BufferedInputFile(json_bytes, filename="tasks.json")
         await bot.send_document(
             chat_id=ADMIN_ID,
@@ -100,7 +100,7 @@ async def save_tasks():
         logging.error(f"Ошибка при сохранении задач: {e}")
 
 async def restore_tasks_from_telegram():
-    """Скачивает последний бэкап из Telegram при старте сервера"""
+    """Читает локальный бэкап при старте сервера"""
     global tasks_db
     try:
         if os.path.exists(TASKS_FILE):
@@ -112,7 +112,6 @@ async def restore_tasks_from_telegram():
     except Exception as e:
         logging.warning(f"Ошибка чтения локального файла: {e}")
 
-    # Если локального файла нет, пытаемся получить последний файл из истории чата
     logging.info("Локальный файл не найден. Ожидание первого сохранения/бэкапа...")
     tasks_db = []
 
@@ -138,6 +137,8 @@ def parse_deadline_date(deadline_str: str):
         return None
 
 def format_homework_text(raw_text: str) -> str:
+    if not raw_text:
+        return ""
     parts = raw_text.split('|')
     if len(parts) >= 3:
         subject = html.escape(parts[0].strip())
@@ -151,6 +152,8 @@ def format_homework_text(raw_text: str) -> str:
     return html.escape(raw_text)
 
 async def register_or_update_task(raw_text: str, user_msg_id: int, sent_msg_id: int):
+    if not raw_text:
+        return
     parts = [p.strip() for p in raw_text.split('|')]
     if len(parts) >= 3:
         subject = parts[0]
@@ -228,7 +231,13 @@ async def show_tasks_list(message: Message):
 async def show_subject_tasks(message: Message, command: CommandObject):
     try:
         now_msk = datetime.now(MSK_TZ)
-        active_tasks = [t for t in tasks_db if (t["deadline_dt"] if isinstance(t["deadline_dt"], datetime) else datetime.fromisoformat(t["deadline_dt"])) >= now_msk]
+        active_tasks = []
+        for t in tasks_db:
+            dt = t["deadline_dt"]
+            if isinstance(dt, str):
+                dt = datetime.fromisoformat(dt)
+            if dt >= now_msk:
+                active_tasks.append(t)
 
         if not active_tasks:
             await message.answer("Список задач пуст.", parse_mode=ParseMode.HTML)
@@ -273,9 +282,10 @@ async def process_media_group(media_group_id: str):
     if not messages:
         return
 
-    first_msg = messages[0]
-    caption_raw = first_msg.caption or ""
-    formatted_text = format_homework_text(caption_raw) if caption_raw else ""
+    # Находим первое сообщение из группы, у которого есть подпись
+    first_msg_with_caption = next((m for m in messages if m.caption), messages[0])
+    caption_raw = first_msg_with_caption.caption or ""
+    formatted_text = format_homework_text(caption_raw)
 
     media = []
     for i, msg in enumerate(messages):
@@ -300,12 +310,12 @@ async def process_media_group(media_group_id: str):
             if sent_list:
                 sent_msg_id = sent_list[0].message_id
 
-        await first_msg.answer("Сообщение опубликовано.")
+        await first_msg_with_caption.answer("Сообщение опубликовано.")
 
         if caption_raw and sent_msg_id:
-            await register_or_update_task(caption_raw, first_msg.message_id, sent_msg_id)
+            await register_or_update_task(caption_raw, first_msg_with_caption.message_id, sent_msg_id)
     except Exception as e:
-        await first_msg.answer(f"Ошибка при публикации: {e}")
+        await first_msg_with_caption.answer(f"Ошибка при публикации: {e}")
 
 @dp.message(F.chat.type == "private")
 async def handle_private_message(message: Message):
@@ -313,7 +323,7 @@ async def handle_private_message(message: Message):
         await message.answer("Отказано в доступе.")
         return
 
-    # Ручное восстановление базы из файлика tasks.json, если скинете его боту вручную
+    # Восстановление базы из tasks.json
     if message.document and message.document.file_name == "tasks.json":
         try:
             file = await bot.get_file(message.document.file_id)
@@ -335,26 +345,42 @@ async def handle_private_message(message: Message):
         media_groups[message.media_group_id].append(message)
         return
 
-    caption_or_text = message.caption or message.text
-    if not caption_or_text:
-        await message.answer("Ошибка ввода. Добавьте описание задания с разделителем |")
-        return
-
+    caption_or_text = message.caption or message.text or ""
     formatted_text = format_homework_text(caption_or_text)
 
     try:
         sent_msg_id = None
         if message.photo:
-            sent = await bot.send_photo(chat_id=TARGET_CHAT_ID, message_thread_id=TARGET_THREAD_ID, photo=message.photo[-1].file_id, caption=formatted_text, parse_mode=ParseMode.HTML)
+            sent = await bot.send_photo(
+                chat_id=TARGET_CHAT_ID, 
+                message_thread_id=TARGET_THREAD_ID, 
+                photo=message.photo[-1].file_id, 
+                caption=formatted_text, 
+                parse_mode=ParseMode.HTML
+            )
             sent_msg_id = sent.message_id
         elif message.document:
-            sent = await bot.send_document(chat_id=TARGET_CHAT_ID, message_thread_id=TARGET_THREAD_ID, document=message.document.file_id, caption=formatted_text, parse_mode=ParseMode.HTML)
+            sent = await bot.send_document(
+                chat_id=TARGET_CHAT_ID, 
+                message_thread_id=TARGET_THREAD_ID, 
+                document=message.document.file_id, 
+                caption=formatted_text, 
+                parse_mode=ParseMode.HTML
+            )
             sent_msg_id = sent.message_id
         else:
-            sent = await bot.send_message(chat_id=TARGET_CHAT_ID, message_thread_id=TARGET_THREAD_ID, text=formatted_text, parse_mode=ParseMode.HTML)
+            if not caption_or_text:
+                await message.answer("Ошибка ввода. Добавьте описание задания с разделителем |")
+                return
+            sent = await bot.send_message(
+                chat_id=TARGET_CHAT_ID, 
+                message_thread_id=TARGET_THREAD_ID, 
+                text=formatted_text, 
+                parse_mode=ParseMode.HTML
+            )
             sent_msg_id = sent.message_id
 
-        if sent_msg_id:
+        if caption_or_text and sent_msg_id:
             await register_or_update_task(caption_or_text, message.message_id, sent_msg_id)
 
         await message.answer("Сообщение опубликовано.")
@@ -366,7 +392,7 @@ async def handle_edited_private_message(message: Message):
     if ALLOWED_USERS and message.from_user.id not in ALLOWED_USERS:
         return
 
-    caption_or_text = message.caption or message.text
+    caption_or_text = message.caption or message.text or ""
     if not caption_or_text:
         return
 
@@ -417,9 +443,15 @@ async def reminder_checker():
                 except Exception as e:
                     logging.error(f"Ошибка при отправке напоминания: {e}")
 
-        # Автоматическая очистка задач старше 1 дня после дедлайна
+        # Очистка задач старше 1 дня после дедлайна
         initial_count = len(tasks_db)
-        cleaned_db = [t for t in tasks_db if now_msk <= ((t["deadline_dt"] if isinstance(t["deadline_dt"], datetime) else datetime.fromisoformat(t["deadline_dt"])) + timedelta(days=1))]
+        cleaned_db = []
+        for t in tasks_db:
+            dl = t["deadline_dt"]
+            if isinstance(dl, str):
+                dl = datetime.fromisoformat(dl)
+            if now_msk <= (dl + timedelta(days=1)):
+                cleaned_db.append(t)
 
         tasks_db = cleaned_db
         if len(tasks_db) < initial_count:
