@@ -430,8 +430,7 @@ async def reminder_checker():
                 deadline_esc = html.escape(task['deadline_str'])
 
                 text = (
-                    f"<b>НАПОМИНАНИЕ О ДЕДЛАЙНЕ</b>\n"
-                    f"Срок сдачи завтра.\n\n"
+                    f"<b>НАПОМИНАНИЕ О ДЕДЛАЙНЕ</b>\n\n"
                     f"<b>Предмет:</b> {subject_esc}\n"
                     f"<b>Задание:</b> {task_esc}\n"
                     f"<b>Срок:</b> <u>{deadline_esc}</u>"
