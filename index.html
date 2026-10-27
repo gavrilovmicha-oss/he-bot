@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Добавление задания</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        :root {
+            --bg-color: var(--tg-theme-bg-color, #ffffff);
+            --text-color: var(--tg-theme-text-color, #000000);
+            --hint-color: var(--tg-theme-hint-color, #999999);
+            --button-color: var(--tg-theme-button-color, #3390ec);
+            --button-text-color: var(--tg-theme-button-text-color, #ffffff);
+            --secondary-bg-color: var(--tg-theme-secondary-bg-color, #f1f1f1);
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 16px;
+        }
+
+        h2 {
+            font-size: 20px;
+            margin-bottom: 16px;
+            text-align: center;
+        }
+
+        .form-group {
+            margin-bottom: 14px;
+        }
+
+        label {
+            display: block;
+            font-size: 13px;
+            color: var(--hint-color);
+            margin-bottom: 6px;
+        }
+
+        select, input, textarea {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid var(--hint-color);
+            border-radius: 8px;
+            background-color: var(--secondary-bg-color);
+            color: var(--text-color);
+            font-size: 15px;
+            box-sizing: border-box;
+            outline: none;
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+
+        .radio-group {
+            display: flex;
+            gap: 8px;
+        }
+
+        .radio-btn {
+            flex: 1;
+            padding: 10px;
+            text-align: center;
+            border: 1px solid var(--hint-color);
+            border-radius: 8px;
+            background-color: var(--secondary-bg-color);
+            cursor: pointer;
+            font-size: 14px;
+            user-select: none;
+            transition: all 0.2s;
+        }
+
+        .radio-btn.active {
+            background-color: var(--button-color);
+            color: var(--button-text-color);
+            border-color: var(--button-color);
+        }
+
+        button.submit-btn {
+            width: 100%;
+            background-color: var(--button-color);
+            color: var(--button-text-color);
+            border: none;
+            border-radius: 8px;
+            padding: 14px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+
+    <h2>Новое задание</h2>
+
+    <div class="form-group">
+        <label for="subject">Предмет</label>
+        <select id="subject">
+            <option value="" disabled selected>Выберите предмет...</option>
+            <option value="Детали машин и основы конструирования">Детали машин и основы конструирования</option>
+            <option value="Механическая часть электрического подвижного состава">Механическая часть электрического подвижного состава</option>
+            <option value="Математическое моделирование систем и процессов">Математическое моделирование систем и процессов</option>
+            <option value="Основы теории надежности">Основы теории надежности</option>
+            <option value="Электронные преобразователи высокоскоростного наземного транспорта">Электронные преобразователи высокоскоростного наземного транспорта</option>
+            <option value="Метрология, стандартизация и сертификация">Метрология, стандартизация и сертификация</option>
+            <option value="Электротехника и электроника">Электротехника и электроника</option>
+            <option value="Правовое обеспечение профессиональной деятельности">Правовое обеспечение профессиональной деятельности</option>
+            <option value="Экономическая культура и финансовая грамотность">Экономическая культура и финансовая грамотность</option>
+        </select>
+    </div>
+
+    <div class="form-group">
+        <label for="taskText">Описание задания</label>
+        <textarea id="taskText" placeholder="Например: Сделать отчёт по лабе №2..."></textarea>
+    </div>
+
+    <div class="form-group">
+        <label for="taskDate">Дата сдачи</label>
+        <input type="date" id="taskDate">
+    </div>
+
+    <div class="form-group">
+        <label>Сложность</label>
+        <div class="radio-group">
+            <div class="radio-btn" data-value="Лёгкое">Лёгкое</div>
+            <div class="radio-btn active" data-value="Среднее">Среднее</div>
+            <div class="radio-btn" data-value="Сложное">Сложное</div>
+        </div>
+    </div>
+
+    <button class="submit-btn" id="submitBtn">Добавить задание</button>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand(); // Разворачиваем на весь экран
+
+        let selectedDifficulty = 'Среднее';
+
+        // Логика выбора сложности кнопками
+        document.querySelectorAll('.radio-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.radio-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                selectedDifficulty = btn.getAttribute('data-value');
+            });
+        });
+
+        // Отправка данных боту
+        document.getElementById('submitBtn').addEventListener('click', () => {
+            const subject = document.getElementById('subject').value;
+            const taskText = document.getElementById('taskText').value.trim();
+            const taskDate = document.getElementById('taskDate').value;
+
+            if (!subject) {
+                alert('Пожалуйста, выберите предмет!');
+                return;
+            }
+            if (!taskText) {
+                alert('Пожалуйста, введите текст задания!');
+                return;
+            }
+            if (!taskDate) {
+                alert('Пожалуйста, выберите дату сдачи!');
+                return;
+            }
+
+            // Преобразуем дату из YYYY-MM-DD в DD.MM.YYYY для удобства
+            const [year, month, day] = taskDate.split('-');
+            const formattedDate = `${day}.${month}.${year}`;
+
+            const data = {
+                subject: subject,
+                text: taskText,
+                date: formattedDate,
+                difficulty: selectedDifficulty
+            };
+
+            // Передаем данные обратно в бота
+            tg.sendData(JSON.stringify(data));
+            tg.close();
+        });
+    </script>
+</body>
+</html>
