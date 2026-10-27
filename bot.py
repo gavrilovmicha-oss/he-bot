@@ -13,6 +13,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message, InputMediaPhoto, InputMediaDocument, BotCommand, BufferedInputFile
 from aiogram.enums import ParseMode
+from aiogram import types
 
 logging.basicConfig(level=logging.INFO)
 
@@ -136,64 +137,48 @@ def parse_deadline_date(deadline_str: str):
     except ValueError:
         return None
 
-def format_homework_text(raw_text: str) -> str:
-    if not raw_text:
-        return ""
-    parts = raw_text.split('|')
-    if len(parts) >= 3:
-        subject = html.escape(parts[0].strip())
-        task = html.escape(parts[1].strip())
-        deadline = html.escape(parts[2].strip())
-        return (
-            f"<b>Предмет:</b> {subject}\n\n"
-            f"{task}\n\n"
-            f"<b>Срок сдачи:</b> <u>{deadline}</u>"
-        )
-    return html.escape(raw_text)
+def format_homework_text(subject: str, task: str, deadline: str) -> str:
+    return (
+        f"<b>Предмет:</b> {html.escape(subject)}\n\n"
+        f"{html.escape(task)}\n\n"
+        f"<b>Срок сдачи:</b> <u>{html.escape(deadline)}</u>"
+    )
 
-async def register_or_update_task(raw_text: str, user_msg_id: int, sent_msg_id: int):
-    if not raw_text:
-        return
-    parts = [p.strip() for p in raw_text.split('|')]
-    if len(parts) >= 3:
-        subject = parts[0]
-        task = parts[1]
-        deadline_str = parts[2]
-        difficulty = parts[3].lower() if len(parts) >= 4 else "сложное"
+async def register_or_update_task(subject: str, task: str, deadline_str: str, difficulty: str, user_msg_id: int, sent_msg_id: int):
+    deadline_dt = parse_deadline_date(deadline_str)
+    if deadline_dt:
+        diff_lower = difficulty.lower()
+        if "легк" in diff_lower or "лёгк" in diff_lower:
+            offset_hours = 7
+        elif "средн" in diff_lower:
+            offset_hours = 12
+        else:
+            offset_hours = 31
 
-        deadline_dt = parse_deadline_date(deadline_str)
-        if deadline_dt:
-            if "легк" in difficulty or "лёгк" in difficulty:
-                offset_hours = 7
-            elif "средн" in difficulty:
-                offset_hours = 12
-            else:
-                offset_hours = 31
+        reminder_dt = deadline_dt - timedelta(hours=offset_hours)
 
-            reminder_dt = deadline_dt - timedelta(hours=offset_hours)
-
-            existing = next((t for t in tasks_db if t.get("user_msg_id") == user_msg_id), None)
-            if existing:
-                existing["subject"] = subject
-                existing["task"] = task
-                existing["deadline_str"] = deadline_str
-                existing["deadline_dt"] = deadline_dt
-                existing["reminder_dt"] = reminder_dt
-                existing["reminded"] = False
-                if sent_msg_id:
-                    existing["sent_msg_id"] = sent_msg_id
-            else:
-                tasks_db.append({
-                    "user_msg_id": user_msg_id,
-                    "sent_msg_id": sent_msg_id,
-                    "subject": subject,
-                    "task": task,
-                    "deadline_str": deadline_str,
-                    "deadline_dt": deadline_dt,
-                    "reminder_dt": reminder_dt,
-                    "reminded": False
-                })
-            await save_tasks()
+        existing = next((t for t in tasks_db if t.get("user_msg_id") == user_msg_id), None)
+        if existing:
+            existing["subject"] = subject
+            existing["task"] = task
+            existing["deadline_str"] = deadline_str
+            existing["deadline_dt"] = deadline_dt
+            existing["reminder_dt"] = reminder_dt
+            existing["reminded"] = False
+            if sent_msg_id:
+                existing["sent_msg_id"] = sent_msg_id
+        else:
+            tasks_db.append({
+                "user_msg_id": user_msg_id,
+                "sent_msg_id": sent_msg_id,
+                "subject": subject,
+                "task": task,
+                "deadline_str": deadline_str,
+                "deadline_dt": deadline_dt,
+                "reminder_dt": reminder_dt,
+                "reminded": False
+            })
+        await save_tasks()
 
 # --- КОМАНДЫ ---
 
@@ -272,7 +257,46 @@ async def show_subject_tasks(message: Message, command: CommandObject):
     except Exception as e:
         await message.answer(f"Произошла ошибка: {e}")
 
-# --- ОБРАБОТКА СООБЩЕНИЙ В ЛС ---
+# --- ОБРАБОТКА ДАННЫХ ИЗ MINI APP ---
+
+@dp.message(F.web_app_data)
+async def handle_web_app_data(message: types.Message):
+    if ALLOWED_USERS and message.from_user.id not in ALLOWED_USERS:
+        await message.answer("Отказано в доступе.")
+        return
+
+    try:
+        data = json.loads(message.web_app_data.data)
+        
+        subject = data.get("subject")
+        task_text = data.get("text")
+        date_str = data.get("date")  # формата DD.MM.YYYY
+        difficulty = data.get("difficulty", "Среднее")
+        
+        if not subject or not task_text or not date_str:
+            await message.answer("❌ Ошибка: заполнены не все поля в мини-приложении.")
+            return
+
+        formatted_text = format_homework_text(subject, task_text, date_str)
+
+        # Публикуем карточку в целевую группу/тему
+        sent = await bot.send_message(
+            chat_id=TARGET_CHAT_ID,
+            message_thread_id=TARGET_THREAD_ID,
+            text=formatted_text,
+            parse_mode=ParseMode.HTML
+        )
+        
+        # Регистрируем задачу в базе для таймеров дедлайнов и списка /tasks
+        await register_or_update_task(subject, task_text, date_str, difficulty, message.message_id, sent.message_id)
+
+        await message.answer("✅ Задание успешно добавлено через Mini App и опубликовано в группу!")
+        
+    except Exception as e:
+        logging.error(f"Ошибка при обработке Web App data: {e}")
+        await message.answer(f"❌ Произошла ошибка при сохранении задания: {e}")
+
+# --- ОБРАБОТКА СООБЩЕНИЙ В ЛС (СТАРЫЙ МЕТОД С ЧЕРТОЧКАМИ) ---
 
 media_groups = {}
 
@@ -282,10 +306,14 @@ async def process_media_group(media_group_id: str):
     if not messages:
         return
 
-    # Находим первое сообщение из группы, у которого есть подпись
     first_msg_with_caption = next((m for m in messages if m.caption), messages[0])
     caption_raw = first_msg_with_caption.caption or ""
-    formatted_text = format_homework_text(caption_raw)
+    
+    parts = [p.strip() for p in caption_raw.split('|')]
+    if len(parts) >= 3:
+        formatted_text = format_homework_text(parts[0], parts[1], parts[2])
+    else:
+        formatted_text = html.escape(caption_raw)
 
     media = []
     for i, msg in enumerate(messages):
@@ -312,8 +340,8 @@ async def process_media_group(media_group_id: str):
 
         await first_msg_with_caption.answer("Сообщение опубликовано.")
 
-        if caption_raw and sent_msg_id:
-            await register_or_update_task(caption_raw, first_msg_with_caption.message_id, sent_msg_id)
+        if len(parts) >= 3 and sent_msg_id:
+            await register_or_update_task(parts[0], parts[1], parts[2], parts[3] if len(parts) >= 4 else "сложное", first_msg_with_caption.message_id, sent_msg_id)
     except Exception as e:
         await first_msg_with_caption.answer(f"Ошибка при публикации: {e}")
 
@@ -346,7 +374,12 @@ async def handle_private_message(message: Message):
         return
 
     caption_or_text = message.caption or message.text or ""
-    formatted_text = format_homework_text(caption_or_text)
+    parts = [p.strip() for p in caption_or_text.split('|')]
+    
+    if len(parts) >= 3:
+        formatted_text = format_homework_text(parts[0], parts[1], parts[2])
+    else:
+        formatted_text = html.escape(caption_or_text)
 
     try:
         sent_msg_id = None
@@ -370,7 +403,7 @@ async def handle_private_message(message: Message):
             sent_msg_id = sent.message_id
         else:
             if not caption_or_text:
-                await message.answer("Ошибка ввода. Добавьте описание задания с разделителем |")
+                await message.answer("Ошибка ввода. Отредактируйте или отправьте через Mini App.")
                 return
             sent = await bot.send_message(
                 chat_id=TARGET_CHAT_ID, 
@@ -380,8 +413,8 @@ async def handle_private_message(message: Message):
             )
             sent_msg_id = sent.message_id
 
-        if caption_or_text and sent_msg_id:
-            await register_or_update_task(caption_or_text, message.message_id, sent_msg_id)
+        if len(parts) >= 3 and sent_msg_id:
+            await register_or_update_task(parts[0], parts[1], parts[2], parts[3] if len(parts) >= 4 else "сложное", message.message_id, sent_msg_id)
 
         await message.answer("Сообщение опубликовано.")
     except Exception as e:
@@ -396,9 +429,13 @@ async def handle_edited_private_message(message: Message):
     if not caption_or_text:
         return
 
+    parts = [p.strip() for p in caption_or_text.split('|')]
+    if len(parts) < 3:
+        return
+
     task_entry = next((t for t in tasks_db if t.get("user_msg_id") == message.message_id), None)
     sent_msg_id = task_entry["sent_msg_id"] if task_entry else 0
-    formatted_text = format_homework_text(caption_or_text)
+    formatted_text = format_homework_text(parts[0], parts[1], parts[2])
 
     try:
         if sent_msg_id and sent_msg_id != 0:
@@ -407,7 +444,7 @@ async def handle_edited_private_message(message: Message):
             else:
                 await bot.edit_message_text(chat_id=TARGET_CHAT_ID, message_id=sent_msg_id, text=formatted_text, parse_mode=ParseMode.HTML)
 
-        await register_or_update_task(caption_or_text, message.message_id, sent_msg_id)
+        await register_or_update_task(parts[0], parts[1], parts[2], parts[3] if len(parts) >= 4 else "сложное", message.message_id, sent_msg_id)
         await message.answer("Задание успешно сохранено в базу!")
     except Exception as e:
         await message.answer(f"Ошибка при сохранении: {e}")
