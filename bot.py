@@ -287,7 +287,7 @@ async def handle_web_app_data(message: types.Message):
             parse_mode=ParseMode.HTML
         )
         
-        # Регистрируем задачу в базе для таймеров дедлайнов и списка /tasks
+        # Регистрируем задачу в базе через ту же функцию, что и обычные сообщения, чтобы создались deadline_dt и reminder_dt
         await register_or_update_task(subject, task_text, date_str, difficulty, message.message_id, sent.message_id)
 
         await message.answer("✅ Задание успешно добавлено через Mini App и опубликовано в группу!")
