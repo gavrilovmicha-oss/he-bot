@@ -261,6 +261,7 @@ async def show_subject_tasks(message: Message, command: CommandObject):
 
 @dp.message(F.web_app_data)
 async def handle_web_app_data(message: types.Message):
+    logging.info(f"ПОЛУЧЕНЫ ДАННЫЕ ИЗ WEB APP: {message.web_app_data.data}") # <-- Добавь эту строчку для проверки
     if ALLOWED_USERS and message.from_user.id not in ALLOWED_USERS:
         await message.answer("Отказано в доступе.")
         return
