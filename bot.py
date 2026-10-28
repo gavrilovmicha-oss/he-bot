@@ -259,9 +259,9 @@ async def show_subject_tasks(message: Message, command: CommandObject):
 
 # --- ОБРАБОТКА ДАННЫХ ИЗ MINI APP ---
 
-@dp.message(F.web_app_data)
+@dp.message(lambda message: message.web_app_data is not None)
 async def handle_web_app_data(message: types.Message):
-    logging.info(f"ПОЛУЧЕНЫ ДАННЫЕ ИЗ WEB APP: {message.web_app_data.data}") # <-- Добавь эту строчку для проверки
+    logging.info(f"ПОЛУЧЕНЫ ДАННЫЕ ИЗ WEB APP: {message.web_app_data.data}")
     if ALLOWED_USERS and message.from_user.id not in ALLOWED_USERS:
         await message.answer("Отказано в доступе.")
         return
@@ -288,7 +288,7 @@ async def handle_web_app_data(message: types.Message):
             parse_mode=ParseMode.HTML
         )
         
-        # Регистрируем задачу в базе через ту же функцию, что и обычные сообщения, чтобы создались deadline_dt и reminder_dt
+        # Регистрируем задачу в базе
         await register_or_update_task(subject, task_text, date_str, difficulty, message.message_id, sent.message_id)
 
         await message.answer("✅ Задание успешно добавлено через Mini App и опубликовано в группу!")
