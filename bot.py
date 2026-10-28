@@ -264,6 +264,46 @@ async def cmd_add(message: Message):
     ])
     await message.answer("Нажми на кнопку ниже, чтобы открыть форму добавления задания:", reply_markup=kb)
 
+@dp.message(Command("start"))
+async def cmd_start(message: Message, command: CommandObject):
+    # Проверяем, есть ли зашифрованные данные от мини-приложения
+    if command.args and command.args.startswith("hw_"):
+        if ALLOWED_USERS and message.from_user.id not in ALLOWED_USERS:
+            await message.answer("Отказано в доступе.")
+            return
+        try:
+            # Декодируем текст задания обратно из URL
+            raw_data = urllib.parse.unquote(command.args[3:])
+            parts = [p.strip() for p in raw_data.split('|')]
+            
+            if len(parts) >= 3:
+                subject, task_text, date_str = parts[0], parts[1], parts[2]
+                difficulty = parts[3] if len(parts) >= 4 else "Среднее"
+                
+                formatted_text = format_homework_text(subject, task_text, date_str)
+
+                # Публикуем карточку в целевую группу/тему
+                sent = await bot.send_message(
+                    chat_id=TARGET_CHAT_ID,
+                    message_thread_id=TARGET_THREAD_ID,
+                    text=formatted_text,
+                    parse_mode=ParseMode.HTML
+                )
+                
+                # Сохраняем в базу задач
+                await register_or_update_task(subject, task_text, date_str, difficulty, message.message_id, sent.message_id)
+
+                await message.answer("✅ Задание успешно добавлено через Mini App и опубликовано в группу!")
+            else:
+                await message.answer("❌ Ошибка: поврежден формат данных задания.")
+        except Exception as e:
+            logging.error(f"Ошибка при обработке start-параметра: {e}")
+            await message.answer(f"❌ Произошла ошибка: {e}")
+        return
+
+    # Обычное приветствие для старта без параметров
+    await message.answer("Привет! Отправь ДЗ текстом с черточками (|) или используй мини-приложение.")
+
 
 # --- ОБРАБОТКА ДАННЫХ ИЗ MINI APP ---
 
