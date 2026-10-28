@@ -257,6 +257,14 @@ async def show_subject_tasks(message: Message, command: CommandObject):
     except Exception as e:
         await message.answer(f"Произошла ошибка: {e}")
 
+@dp.message(Command("add"))
+async def cmd_add(message: Message):
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="📝 Открыть форму ДЗ", web_app=types.WebAppInfo(url="https://gavrilovmicha-oss.github.io/he-bot/?v=2"))]
+    ])
+    await message.answer("Нажми на кнопку ниже, чтобы открыть форму добавления задания:", reply_markup=kb)
+
+
 # --- ОБРАБОТКА ДАННЫХ ИЗ MINI APP ---
 
 @dp.message(lambda message: message.web_app_data is not None)
