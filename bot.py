@@ -261,26 +261,21 @@ async def show_subject_tasks(message: Message, command: CommandObject):
 
 @dp.message(lambda message: message.web_app_data is not None)
 async def handle_web_app_data(message: types.Message):
-    logging.info(f"ПОЛУЧЕНЫ ДАННЫЕ ИЗ WEB APP: {message.web_app_data.data}")
-    if ALLOWED_USERS and message.from_user.id not in ALLOWED_USERS:
-        await message.answer("Отказано в доступе.")
-        return
-
     try:
+        await message.answer(f"🔍 Получен сырой json: {message.web_app_data.data}")
         data = json.loads(message.web_app_data.data)
         
         subject = data.get("subject")
         task_text = data.get("text")
-        date_str = data.get("date")  # формата DD.MM.YYYY
+        date_str = data.get("date")
         difficulty = data.get("difficulty", "Среднее")
         
         if not subject or not task_text or not date_str:
-            await message.answer("❌ Ошибка: заполнены не все поля в мини-приложении.")
+            await message.answer("❌ Ошибка: заполнены не все поля.")
             return
 
         formatted_text = format_homework_text(subject, task_text, date_str)
 
-        # Публикуем карточку в целевую группу/тему
         sent = await bot.send_message(
             chat_id=TARGET_CHAT_ID,
             message_thread_id=TARGET_THREAD_ID,
@@ -288,14 +283,13 @@ async def handle_web_app_data(message: types.Message):
             parse_mode=ParseMode.HTML
         )
         
-        # Регистрируем задачу в базе
         await register_or_update_task(subject, task_text, date_str, difficulty, message.message_id, sent.message_id)
 
-        await message.answer("✅ Задание успешно добавлено через Mini App и опубликовано в группу!")
+        await message.answer("✅ Успешно добавлено через Mini App!")
         
     except Exception as e:
-        logging.error(f"Ошибка при обработке Web App data: {e}")
-        await message.answer(f"❌ Произошла ошибка при сохранении задания: {e}")
+        logging.error(f"КРИТИЧЕСКАЯ ОШИБКА WEB APP: {e}")
+        await message.answer(f"❌ Ошибка в коде: {e}")
 
 # --- ОБРАБОТКА СООБЩЕНИЙ В ЛС (СТАРЫЙ МЕТОД С ЧЕРТОЧКАМИ) ---
 
