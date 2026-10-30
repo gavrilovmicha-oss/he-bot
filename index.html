@@ -150,7 +150,7 @@
             });
         });
 
-        document.getElementById('submitBtn').addEventListener('click', () => {
+        document.getElementById('submitBtn').addEventListener('click', async () => {
             const subject = document.getElementById('subject').value;
             const taskText = document.getElementById('taskText').value.trim();
             const taskDate = document.getElementById('taskDate').value;
@@ -171,16 +171,32 @@
             const [year, month, day] = taskDate.split('-');
             const formattedDate = `${day}.${month}.${year}`;
 
-            // Формируем текст в формате с черточками для твоего бота
-            const textToSend = `${subject} | ${taskText} | ${formattedDate} | ${selectedDifficulty}`;
+            const payload = {
+                subject: subject,
+                text: taskText,
+                date: formattedDate,
+                difficulty: selectedDifficulty
+            };
 
-            // Указан твой актуальный бот
-            const botUsername = "raspisanie_na_nedelu_bot";
-            
-            const url = `https://t.me/${botUsername}?start=hw_${encodeURIComponent(textToSend)}`;
-            
-            tg.openTelegramLink(url);
-            tg.close();
+            try {
+                // Стучимся на свой же Flask-сервер на Render
+                const response = await fetch('https://he-bot.onrender.com/api/add_task', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const result = await response.json();
+                
+                if (result.ok) {
+                    alert('✅ Задание успешно добавлено в группу!');
+                    tg.close();
+                } else {
+                    alert('❌ Ошибка: ' + (result.error || 'Неизвестная ошибка'));
+                }
+            } catch (err) {
+                alert('❌ Ошибка сети: ' + err.message);
+            }
         });
     </script>
 </body>
