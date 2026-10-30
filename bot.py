@@ -8,7 +8,7 @@ import json
 import urllib.request
 import time
 from datetime import datetime, timedelta, timezone
-from flask import Flask
+from flask import Flask, request, jsonify
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message, InputMediaPhoto, InputMediaDocument, BotCommand, BufferedInputFile
@@ -44,6 +44,43 @@ def self_ping():
             logging.warning(f"Self-ping error: {e}")
 
 threading.Thread(target=self_ping, daemon=True).start()
+
+# Глобальная переменная для безопасной связи Flask с главным циклом бота
+main_loop = None
+
+# --- Эндпоинт для приема данных из Mini App ---
+@app.route('/api/add_task', methods=['POST'])
+def api_add_task():
+    try:
+        data = request.json
+        subject = data.get("subject")
+        task_text = data.get("text")
+        date_str = data.get("date")
+        difficulty = data.get("difficulty", "Среднее")
+
+        if not subject or not task_text or not date_str:
+            return jsonify({"ok": False, "error": "Не все поля заполнены"}), 400
+
+        formatted_text = format_homework_text(subject, task_text, date_str)
+
+        async def send_and_save():
+            sent = await bot.send_message(
+                chat_id=TARGET_CHAT_ID,
+                message_thread_id=TARGET_THREAD_ID,
+                text=formatted_text,
+                parse_mode=ParseMode.HTML
+            )
+            # Сохраняем в базу задач
+            await register_or_update_task(subject, task_text, date_str, difficulty, 0, sent.message_id)
+
+        # Безопасно передаем задачу в главный поток бота через сохраненный loop
+        future = asyncio.run_coroutine_threadsafe(send_and_save(), main_loop)
+        future.result(timeout=10)
+
+        return jsonify({"ok": True})
+    except Exception as e:
+        logging.error(f"Ошибка в API /api/add_task: {e}")
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 # --- Настройки бота ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -266,13 +303,11 @@ async def cmd_add(message: Message):
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message, command: CommandObject):
-    # Проверяем, есть ли зашифрованные данные от мини-приложения
     if command.args and command.args.startswith("hw_"):
         if ALLOWED_USERS and message.from_user.id not in ALLOWED_USERS:
             await message.answer("Отказано в доступе.")
             return
         try:
-            # Декодируем текст задания обратно из URL
             raw_data = urllib.parse.unquote(command.args[3:])
             parts = [p.strip() for p in raw_data.split('|')]
             
@@ -282,7 +317,6 @@ async def cmd_start(message: Message, command: CommandObject):
                 
                 formatted_text = format_homework_text(subject, task_text, date_str)
 
-                # Публикуем карточку в целевую группу/тему
                 sent = await bot.send_message(
                     chat_id=TARGET_CHAT_ID,
                     message_thread_id=TARGET_THREAD_ID,
@@ -290,7 +324,6 @@ async def cmd_start(message: Message, command: CommandObject):
                     parse_mode=ParseMode.HTML
                 )
                 
-                # Сохраняем в базу задач
                 await register_or_update_task(subject, task_text, date_str, difficulty, message.message_id, sent.message_id)
 
                 await message.answer("✅ Задание успешно добавлено через Mini App и опубликовано в группу!")
@@ -301,18 +334,15 @@ async def cmd_start(message: Message, command: CommandObject):
             await message.answer(f"❌ Произошла ошибка: {e}")
         return
 
-    # Обычное приветствие для старта без параметров
     await message.answer("Привет! Отправь ДЗ текстом с черточками (|) или используй мини-приложение.")
 
 
-# --- ОБРАБОТКА ДАННЫХ ИЗ MINI APP ---
+# --- ОБРАБОТКА ДАННЫХ ИЗ MINI APP (Старый метод на всякий случай) ---
 
 @dp.message(lambda message: message.web_app_data is not None)
 async def handle_web_app_data(message: types.Message):
     try:
-        await message.answer(f"🔍 Получен сырой json: {message.web_app_data.data}")
         data = json.loads(message.web_app_data.data)
-        
         subject = data.get("subject")
         task_text = data.get("text")
         date_str = data.get("date")
@@ -332,9 +362,7 @@ async def handle_web_app_data(message: types.Message):
         )
         
         await register_or_update_task(subject, task_text, date_str, difficulty, message.message_id, sent.message_id)
-
         await message.answer("✅ Успешно добавлено через Mini App!")
-        
     except Exception as e:
         logging.error(f"КРИТИЧЕСКАЯ ОШИБКА WEB APP: {e}")
         await message.answer(f"❌ Ошибка в коде: {e}")
@@ -394,7 +422,6 @@ async def handle_private_message(message: Message):
         await message.answer("Отказано в доступе.")
         return
 
-    # Восстановление базы из tasks.json
     if message.document and message.document.file_name == "tasks.json":
         try:
             file = await bot.get_file(message.document.file_id)
@@ -522,7 +549,6 @@ async def reminder_checker():
                 except Exception as e:
                     logging.error(f"Ошибка при отправке напоминания: {e}")
 
-        # Очистка задач старше 1 дня после дедлайна
         initial_count = len(tasks_db)
         cleaned_db = []
         for t in tasks_db:
@@ -546,6 +572,9 @@ async def set_bot_commands():
     await bot.set_my_commands(commands)
 
 async def main():
+    global main_loop
+    main_loop = asyncio.get_running_loop()
+    
     await set_bot_commands()
     await restore_tasks_from_telegram()
     asyncio.create_task(reminder_checker())
