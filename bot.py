@@ -48,9 +48,17 @@ threading.Thread(target=self_ping, daemon=True).start()
 # Глобальная переменная для безопасной связи Flask с главным циклом бота
 main_loop = None
 
-# --- Эндпоинт для приема данных из Mini App ---
-@app.route('/api/add_task', methods=['POST'])
+# --- Эндпоинт для приема данных из Mini App с поддержкой CORS ---
+@app.route('/api/add_task', methods=['POST', 'OPTIONS'])
 def api_add_task():
+    # Предварительный запрос браузера (Preflight)
+    if request.method == 'OPTIONS':
+        response = jsonify({'status': 'ok'})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+        response.headers.add('Access-Control-Allow-Methods', 'POST')
+        return response
+
     try:
         data = request.json
         subject = data.get("subject")
@@ -59,7 +67,9 @@ def api_add_task():
         difficulty = data.get("difficulty", "Среднее")
 
         if not subject or not task_text or not date_str:
-            return jsonify({"ok": False, "error": "Не все поля заполнены"}), 400
+            res = jsonify({"ok": False, "error": "Не все поля заполнены"})
+            res.headers.add('Access-Control-Allow-Origin', '*')
+            return res, 400
 
         formatted_text = format_homework_text(subject, task_text, date_str)
 
@@ -77,10 +87,14 @@ def api_add_task():
         future = asyncio.run_coroutine_threadsafe(send_and_save(), main_loop)
         future.result(timeout=10)
 
-        return jsonify({"ok": True})
+        res = jsonify({"ok": True})
+        res.headers.add('Access-Control-Allow-Origin', '*')
+        return res
     except Exception as e:
         logging.error(f"Ошибка в API /api/add_task: {e}")
-        return jsonify({"ok": False, "error": str(e)}), 500
+        res = jsonify({"ok": False, "error": str(e)})
+        res.headers.add('Access-Control-Allow-Origin', '*')
+        return res, 500
 
 # --- Настройки бота ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
