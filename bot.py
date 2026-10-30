@@ -391,6 +391,9 @@ async def process_media_group(media_group_id: str):
     if not messages:
         return
 
+    # Сортируем сообщения внутри альбома по их id (Telegram гарантирует возрастание ID для альбомов)
+    messages.sort(key=lambda m: m.message_id)
+
     first_msg_with_caption = next((m for m in messages if m.caption), messages[0])
     caption_raw = first_msg_with_caption.caption or ""
     
